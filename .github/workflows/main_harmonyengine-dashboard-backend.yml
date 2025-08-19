@@ -1,8 +1,4 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-# More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
-
-name: Build and deploy Python app to Azure Web App - harmonyengine-dashboard-backend
+name: Build and deploy Django app to Azure Web App - harmonyengine-dashboard-backend
 
 on:
   push:
@@ -14,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -24,15 +20,26 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Create and start virtual environment
+      - name: Install dependencies (with cache)
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - run: pip install -r requirements.txt
+
+      - name: Run Django tests
+        env:
+          DJANGO_SETTINGS_MODULE: myproject.settings  # 🔧 update with your settings module
+          SECRET_KEY: test-secret
+          DATABASE_URL: sqlite:///db.sqlite3
         run: |
-          python -m venv venv
-          source venv/bin/activate
-      
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-        
-      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
+          python manage.py migrate --noinput
+          python manage.py test
+
+      - name: Collect static files (for Azure serving, if using Whitenoise)
+        run: python manage.py collectstatic --noinput
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
@@ -45,17 +52,25 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    
+
     steps:
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
           name: python-app
       
-      - name: 'Deploy to Azure Web App'
+      - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
           app-name: 'harmonyengine-dashboard-backend'
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_891EF31F4663406C94CBBE7F8F036744 }}
+
+      # Optional: Run migrations on production (be careful if multiple deploys run concurrently)
+      - name: Run Django migrate on Azure
+        uses: azure/cli@v2
+        with:
+          azcliversion: 2.30.0
+          inlineScript: |
+            az webapp ssh --resource-group <YOUR_RESOURCE_GROUP> --name harmonyengine-dashboard-backend --command "python manage.py migrate --noinput"
